@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Consulta de clima</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .glass { background: rgba(255, 255, 255, 0.88); backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.4); }
+        
+        /* Animación de esqueleto para velocidad percibida */
+        .skeleton { background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%); background-size: 200% 100%; animation: skeleton-loading 1.5s infinite; }
+        @keyframes skeleton-loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+        body { transition: background 1.2s ease-in-out; background-size: 400% 400% !important; animation: moveGradient 15s ease infinite; }
+        @keyframes moveGradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        
+        .city-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .city-card:hover { transform: scale(1.01); }
+    </style>
+</head>
+<body id="mainBody" class="bg-gradient-to-br from-slate-800 to-slate-900 min-h-screen font-sans p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto">
+        <header class="text-white text-center mb-10">
+            <h1 class="text-5xl font-black mb-2 tracking-tighter italic">CLIMA<span class="text-blue-400">CONSULTA</span></h1>
+            <p class="opacity-70 font-medium uppercase tracking-[0.2em] text-xs">Consulta 1 o varias ciudades</p>
+        </header>
+
+        <div class="glass rounded-[2.5rem] p-4 shadow-2xl mb-12 max-w-3xl mx-auto flex items-center gap-2">
+            <div class="flex-1 relative">
+                <i class="fa-solid fa-earth-americas absolute left-5 top-1/2 -translate-y-1/2 text-blue-500"></i>
+                <input type="text" id="cityInput" 
+                       placeholder="Chicago, Tokyo, London..." 
+                       class="w-full pl-14 pr-4 py-4 rounded-3xl border-none focus:ring-0 text-lg bg-transparent font-semibold text-gray-800"
+                       onkeypress="if(event.key === 'Enter') weatherApp.fetchWeather()">
+            </div>
+            <button onclick="weatherApp.fetchWeather()" 
+                    class="bg-blue-600 hover:bg-blue-500 text-white w-14 h-14 rounded-2xl transition-all shadow-lg active:scale-90 flex items-center justify-center">
+                <i class="fa-solid fa-bolt-lightning text-xl"></i>
+            </button>
+        </div>
+
+        <div id="skeletonLoader" class="hidden grid grid-cols-1 gap-8">
+            <div class="skeleton h-64 rounded-[3rem] opacity-20"></div>
+            <div class="skeleton h-64 rounded-[3rem] opacity-20"></div>
+        </div>
+
+        <div id="errorDisplay" class="hidden glass border-l-8 border-red-500 p-6 rounded-2xl mb-8 text-red-700 font-bold animate-bounce"></div>
+
+        <main id="weatherDashboard" class="space-y-10">
+            </main>
+    </div>
+
+    <script>
+    const weatherApp = {
+        themes: {
+            clear: "bg-gradient-to-br from-orange-400 via-yellow-400 to-blue-500",
+            cloudy: "bg-gradient-to-br from-slate-400 via-gray-500 to-slate-700",
+            rain: "bg-gradient-to-br from-blue-700 via-indigo-900 to-slate-900",
+            snow: "bg-gradient-to-br from-blue-50 via-slate-200 to-sky-300",
+            storm: "bg-gradient-to-br from-gray-900 via-purple-950 to-black",
+            default: "bg-gradient-to-br from-slate-800 to-slate-900"
+        },
+
+        wmo: {
+            0: { d: "Despejado", i: "fa-sun text-orange-500", t: 'clear' },
+            1: { d: "Despejado", i: "fa-cloud-sun text-orange-400", t: 'clear' },
+            2: { d: "Parcial", i: "fa-cloud text-gray-400", t: 'cloudy' },
+            3: { d: "Nublado", i: "fa-cloud text-gray-500", t: 'cloudy' },
+            51: { d: "Llovizna", i: "fa-cloud-rain text-blue-400", t: 'rain' },
+            61: { d: "Lluvia", i: "fa-cloud-showers-heavy text-blue-600", t: 'rain' },
+            95: { d: "Tormenta", i: "fa-bolt text-indigo-600", t: 'storm' }
+        },
+
+        async fetchWeather() {
+            const input = document.getElementById('cityInput');
+            const cities = input.value.split(',').map(c => c.trim()).filter(c => c !== "");
+            if (cities.length === 0) return;
+
+            this.showSkeleton(true);
+
+            try {
+                // PROCESAMIENTO PARALELO MASIVO
+                const results = await Promise.all(cities.map(city => this.getCityFullData(city)));
+                const validResults = results.filter(r => r !== null);
+
+                if (validResults.length === 0) throw new Error("No se encontraron resultados.");
+
+                this.renderDashboard(validResults);
+                localStorage.setItem('last_search', JSON.stringify(validResults));
+
+            } catch (err) {
+                this.showError(err.message);
+                const cache = localStorage.getItem('last_search');
+                if (cache) this.renderDashboard(JSON.parse(cache));
+            } finally {
+                this.showSkeleton(false);
+            }
+        },
+
+        async getCityFullData(city) {
+            try {
+                const geo = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=es`).then(r => r.json());
+                if (!geo.results) return null;
+
+                const { latitude: lat, longitude: lon, name, country } = geo.results[0];
+                const weather = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=6`).then(r => r.json());
+
+                return { name, country, weather };
+            } catch { return null; }
+        },
+
+        showSkeleton(show) {
+            document.getElementById('skeletonLoader').classList.toggle('hidden', !show);
+            document.getElementById('weatherDashboard').classList.toggle('hidden', show);
+            document.getElementById('errorDisplay').classList.add('hidden');
+        },
+
+        updateBg(code) {
+            const theme = this.wmo[code]?.t || 'default';
+            document.getElementById('mainBody').className = `${this.themes[theme]} min-h-screen font-sans p-4 md:p-8 transition-all duration-1000`;
+        },
+
+        renderDashboard(allData) {
+            const dash = document.getElementById('weatherDashboard');
+            let html = "";
+
+            this.updateBg(allData[0].weather.current_weather.weathercode);
+
+            allData.forEach(city => {
+                const cur = city.weather.current_weather;
+                const daily = city.weather.daily;
+                const info = this.wmo[cur.weathercode] || { d: "Variable", i: "fa-cloud" };
+
+                // Generar Pronóstico Individual por Ciudad
+                let forecastHTML = "";
+                for (let i = 1; i < 6; i++) {
+                    const fInfo = this.wmo[daily.weathercode[i]] || { d: "Variable", i: "fa-cloud" };
+                    const date = new Date(daily.time[i] + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'short' });
+                    forecastHTML += `
+                        <div class="text-center p-3 bg-white/20 rounded-2xl border border-white/30">
+                            <p class="text-[10px] font-black uppercase text-blue-900 mb-1">${date}</p>
+                            <i class="fa-solid ${fInfo.i} text-lg mb-1"></i>
+                            <p class="text-sm font-bold text-gray-800">${Math.round(daily.temperature_2m_max[i])}°</p>
+                        </div>
+                    `;
+                }
+
+                // Estructura de Tarjeta de Ciudad (Reporte Completo)
+                html += `
+                <div class="glass rounded-[3rem] p-8 shadow-2xl city-card border border-white/50 flex flex-col lg:flex-row gap-8 items-center">
+                    <div class="flex-1 w-full text-center lg:text-left">
+                        <div class="flex items-center justify-center lg:justify-start gap-4 mb-2">
+                            <h2 class="text-4xl font-black text-gray-900 tracking-tight">${city.name}</h2>
+                            <span class="text-xs font-bold px-3 py-1 bg-blue-600 text-white rounded-full uppercase">${city.country}</span>
+                        </div>
+                        <p class="text-gray-500 font-bold uppercase tracking-widest text-xs mb-6">Estado Actual: ${info.d}</p>
+                        <div class="flex items-center justify-center lg:justify-start gap-8">
+                            <i class="fa-solid ${info.i} text-7xl drop-shadow-lg"></i>
+                            <div>
+                                <h3 class="text-7xl font-black text-gray-900">${Math.round(cur.temperature)}°</h3>
+                                <p class="text-gray-400 font-bold">Viento: ${cur.windspeed} km/h</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="w-full lg:w-[450px] bg-white/40 p-6 rounded-[2rem] shadow-inner">
+                        <p class="text-xs font-black text-gray-600 mb-4 uppercase tracking-tighter italic">Pronóstico 5 Días - ${city.name}</p>
+                        <div class="grid grid-cols-5 gap-3">
+                            ${forecastHTML}
+                        </div>
+                    </div>
+                </div>`;
+            });
+
+            dash.innerHTML = html;
+        },
+
+        showError(m) {
+            const e = document.getElementById('errorDisplay');
+            e.innerText = m; e.classList.remove('hidden');
+        }
+    };
+    </script>
+</body>
+</html>
